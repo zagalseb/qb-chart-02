@@ -7,10 +7,12 @@ Original file is located at
     https://colab.research.google.com/drive/1rIIHTO-49-JFJMrMi087oR4rrYuBJUUw
 """
 import streamlit as st
-st.title("QB Pass Chart V0.1")
+st.title("QB Pass Chart V0.2")
 
 import matplotlib.pyplot as plt
 import pandas as pd
+from matplotlib.lines import Line2D
+
 
 
 # Función para dibujar el campo de fútbol
@@ -35,6 +37,7 @@ def draw_football_field(ax):
 
 # Función para graficar los pases filtrados
 def plot_football_passes(df, down, distance_type, d1, d2, custom_title):
+    # --- filtros ---
     if down != "All":
         df = df[df['DN'] == down]
 
@@ -47,6 +50,7 @@ def plot_football_passes(df, down, distance_type, d1, d2, custom_title):
     elif distance_type == "Between":
         df = df[(df['DIST'] >= d1) & (df['DIST'] <= d2)]
 
+    # --- figura (SOLO UNA) ---
     fig, ax = plt.subplots(figsize=(8, 8))
     draw_football_field(ax)
 
@@ -55,11 +59,12 @@ def plot_football_passes(df, down, distance_type, d1, d2, custom_title):
     ax.set_xticks([])
     ax.set_yticks([])
     ax.axhline(0, color='blue', linewidth=2)
+    ax.set_aspect('equal')
 
     title = custom_title if custom_title else f"Pass Chart – Down {down}"
     ax.set_title(title)
-    ax.set_aspect('equal')
 
+    # --- puntos ---
     for _, row in df.iterrows():
         x = row['Target X 100']
         y = row['Target Y 100'] - row['SPOT Y 100']
@@ -69,66 +74,21 @@ def plot_football_passes(df, down, distance_type, d1, d2, custom_title):
             ax.text(x, y, str(int(row['WR'])), fontsize=6,
                     ha='center', va='center', color='black')
 
+    # --- leyenda ---
+    legend_elements = [
+        Line2D([0], [0], marker='o', color='w', label='Completo', markerfacecolor='aqua', markersize=8),
+        Line2D([0], [0], marker='o', color='w', label='Incompleto', markerfacecolor='fuchsia', markersize=8),
+        Line2D([0], [0], marker='o', color='w', label='Intercepción', markerfacecolor='red', markersize=8),
+        Line2D([0], [0], marker='o', color='w', label='Touchdown', markerfacecolor='lime', markersize=8),
+        Line2D([0], [0], marker='o', color='w', label='Drop', markerfacecolor='yellow', markersize=8),
+    ]
+    leg = ax.legend(handles=legend_elements, loc='upper right',
+                    frameon=True, facecolor='black', edgecolor='white')
+    for t in leg.get_texts():
+        t.set_color('white')
+
+    # --- mostrar (SOLO UNA VEZ) ---
     st.pyplot(fig)
-    # Si se elige un down específico, filtramos
-    if down != "All":
-        df_filtered = df[df['DN'] == down]
-    else:
-        df_filtered = df.copy()
-
-    # Filtrado por tipo de distancia
-    if distance_type == "Equal to":
-        df_filtered = df_filtered[df_filtered['DIST'] == distance_value1]
-    elif distance_type == "Greater than":
-        df_filtered = df_filtered[df_filtered['DIST'] >= distance_value1]
-    elif distance_type == "Less than":
-        df_filtered = df_filtered[df_filtered['DIST'] <= distance_value1]
-    elif distance_type == "Between":
-        df_filtered = df_filtered[(df_filtered['DIST'] >= distance_value1) & (df_filtered['DIST'] <= distance_value2)]
-
-    fig, ax = plt.subplots(figsize=(10, 10))
-    draw_football_field(ax)
-    ax.set_xlim(0, 53.3)
-    ax.set_ylim(-10, 60)
-    ax.set_xticks([])
-    ax.set_yticks([])
-    ax.set_xlabel(
-        "Hecho por Sebastien Zagal @seb_zagal_\nLínea Azul es línea de scrimmage y las yardas es la profundidad del pase"
-    )
-
-    # 👇 Usamos el título personalizado si no está vacío
-    if custom_title.strip() != "":
-        title = custom_title
-    else:
-        title_down = f"Down {down}" if down != "All" else "All Downs"
-        title = f"Football Pass Locations - {title_down}, Distance {distance_type} {distance_value1} {f'& {distance_value2}' if distance_type == 'Between' else ''}"
-
-    ax.set_title(title)
-    ax.set_aspect('equal')
-    ax.axhline(0, color='blue', linestyle='-', linewidth=2)
-
-    for _, row in df_filtered.iterrows():
-      x = row['Target X 100']
-      y = row['Target Y 100'] - row['SPOT Y 100']
-
-      # Dibujar el punto
-      ax.scatter(x, y, color=row['Color'], s=80)
-
-      # Agregar número del WR como entero (sin .0)
-      if 'WR' in df.columns:
-          wr_num = int(row['WR']) if not pd.isna(row['WR']) else ""
-          ax.text(x, y, str(wr_num), fontsize=6, color='black',
-                  ha='center', va='center', fontweight='bold')
-
-
-
-
-    handles = [plt.Line2D([0], [0], marker='o', color='w', markerfacecolor=color, markersize=8)
-               for color in ['aqua', 'fuchsia', 'red', 'lime', 'yellow']]
-    labels = ['Completo', 'Incompleteto', 'Intercepcion', 'Touchdown', 'Drop']
-    ax.legend(handles, labels, loc='upper right')
-
-    plt.show()
 
 st.title("🏈 Pass Chart Interactivo")
 
