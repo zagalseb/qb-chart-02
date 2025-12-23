@@ -7,7 +7,7 @@ Original file is located at
     https://colab.research.google.com/drive/1rIIHTO-49-JFJMrMi087oR4rrYuBJUUw
 """
 import streamlit as st
-st.title("QB Pass Chart V0.2")
+st.title("QB Pass Chart V0.3")
 
 import matplotlib.pyplot as plt
 import pandas as pd
@@ -35,22 +35,94 @@ def draw_football_field(ax):
             ax.plot([19, 20], [y, y], color='white', linewidth=1)
             ax.plot([33, 34], [y, y], color='white', linewidth=1)
 
+def compute_summary(df_in: pd.DataFrame) -> dict:
+    if df_in is None or df_in.empty:
+        return {"att": 0, "comp": 0, "comp_pct": 0.0, "td": 0, "int": 0, "drop": 0, "avg_depth": 0.0}
+
+    df2 = df_in.copy()
+    df2["DEPTH"] = df2["Target Y 100"] - df2["SPOT Y 100"]
+
+    att = len(df2)
+    comp = int((df2["COM"] == 1).sum()) if "COM" in df2.columns else 0
+    comp_pct = (comp / att * 100) if att > 0 else 0.0
+
+    outcome = df2["TD/INT"].astype(str).str.upper().str.strip() if "TD/INT" in df2.columns else pd.Series([""] * att)
+    td = int((outcome == "TD").sum())
+    it = int((outcome == "INT").sum())
+    drop = int((outcome == "DROP").sum())
+
+    avg_depth = float(df2["DEPTH"].mean()) if att > 0 else 0.0
+
+    return {"att": att, "comp": comp, "comp_pct": comp_pct, "td": td, "int": it, "drop": drop, "avg_depth": avg_depth}
+
+import numpy as np
+
+rng = np.random.default_rng(42)  # cambia el 42 si quieres otra “temporada”
+
+def assign_coverage(row):
+    dn = row.get("DN", None)
+    dist = row.get("DIST", None)
+
+    # si falta info, usa distribución base
+    if pd.isna(dn) or pd.isna(dist):
+        return rng.choice(
+            ["Cover 3", "Cover 1", "Cover 2", "Cover 4", "Cover 6", "Blitz", "2 Man", "Cover 0"],
+            p=[0.30, 0.20, 0.15, 0.12, 0.08, 0.07, 0.05, 0.03]
+        )
+
+    dn = int(dn)
+    dist = float(dist)
+
+    # 3rd/4th & long: más 2-high / quarters / split safety
+    if dn in (3, 4) and dist >= 7:
+        return rng.choice(
+            ["Cover 2", "Cover 4", "Cover 6", "2 Man", "Cover 3", "Cover 1", "Blitz"],
+            p=[0.22, 0.26, 0.16, 0.10, 0.12, 0.08, 0.06]
+        )
+
+    # 3rd/4th & short: más man, presión, single-high
+    if dn in (3, 4) and dist <= 2:
+        return rng.choice(
+            ["Cover 1", "Blitz", "Cover 0", "Cover 3", "2 Man"],
+            p=[0.40, 0.30, 0.12, 0.12, 0.06]
+        )
+
+    # 1st down: mucho Cover 3 / 1, algo de 2/4
+    if dn == 1:
+        return rng.choice(
+            ["Cover 3", "Cover 1", "Cover 2", "Cover 4", "Cover 6", "Blitz", "2 Man", "Cover 0"],
+            p=[0.34, 0.22, 0.14, 0.12, 0.07, 0.06, 0.03, 0.02]
+        )
+
+    # 2nd down: mezcla
+    return rng.choice(
+        ["Cover 3", "Cover 1", "Cover 2", "Cover 4", "Cover 6", "Blitz", "2 Man", "Cover 0"],
+        p=[0.30, 0.20, 0.16, 0.12, 0.08, 0.08, 0.04, 0.02]
+    )
+
+def coverage_to_mof(cov: str) -> str:
+    """
+    MOF Open ~ 2-high structures (Cover 2/4/6, 2 Man).
+    MOF Closed ~ 1-high/0-high (Cover 1/3/0).
+    Blitz puede ser cualquiera; aquí lo tratamos mayormente Closed pero a veces Open.
+    """
+    c = str(cov).strip().lower()
+
+    if c in ("cover 2", "cover 4", "cover 6", "2 man"):
+        return "Open"
+    if c in ("cover 0", "cover 1", "cover 3"):
+        return "Closed"
+    if c == "blitz":
+        # 70% single-high (Closed), 30% 2-high pressures (Open)
+        return rng.choice(["Closed", "Open"], p=[0.70, 0.30])
+
+    return "Unknown"
+
+
+
 # Función para graficar los pases filtrados
 def plot_football_passes(df, down, distance_type, d1, d2, custom_title):
-    # --- filtros ---
-    if down != "All":
-        df = df[df['DN'] == down]
 
-    if distance_type == "Equal to":
-        df = df[df['DIST'] == d1]
-    elif distance_type == "Greater than":
-        df = df[df['DIST'] >= d1]
-    elif distance_type == "Less than":
-        df = df[df['DIST'] <= d1]
-    elif distance_type == "Between":
-        df = df[(df['DIST'] >= d1) & (df['DIST'] <= d2)]
-
-    # --- figura (SOLO UNA) ---
     fig, ax = plt.subplots(figsize=(8, 8))
     draw_football_field(ax)
 
@@ -64,7 +136,6 @@ def plot_football_passes(df, down, distance_type, d1, d2, custom_title):
     title = custom_title if custom_title else f"Pass Chart – Down {down}"
     ax.set_title(title)
 
-    # --- puntos ---
     for _, row in df.iterrows():
         x = row['Target X 100']
         y = row['Target Y 100'] - row['SPOT Y 100']
@@ -74,7 +145,6 @@ def plot_football_passes(df, down, distance_type, d1, d2, custom_title):
             ax.text(x, y, str(int(row['WR'])), fontsize=6,
                     ha='center', va='center', color='black')
 
-    # --- leyenda ---
     legend_elements = [
         Line2D([0], [0], marker='o', color='w', label='Completo', markerfacecolor='aqua', markersize=8),
         Line2D([0], [0], marker='o', color='w', label='Incompleto', markerfacecolor='fuchsia', markersize=8),
@@ -87,7 +157,6 @@ def plot_football_passes(df, down, distance_type, d1, d2, custom_title):
     for t in leg.get_texts():
         t.set_color('white')
 
-    # --- mostrar (SOLO UNA VEZ) ---
     st.pyplot(fig)
 
 st.title("🏈 Pass Chart Interactivo")
@@ -98,29 +167,107 @@ if uploaded_file:
     df = pd.read_csv(uploaded_file) if uploaded_file.name.endswith(".csv") else pd.read_excel(uploaded_file)
     df.columns = df.columns.str.strip()
     df = df.dropna(subset=['Target X 100', 'Target Y 100'])
-
+    df["COM"] = df["COM"].fillna(0)
+    # Crear columnas (si ya existen, esto las sobreescribe para el demo)
+    df["COVERAGE"] = df.apply(assign_coverage, axis=1)
+    df["MOF"] = df["COVERAGE"].apply(coverage_to_mof)
     def get_color(row):
-        if row['TD/INT'] == 'TD':
+        outcome = str(row.get("TD/INT", "")).strip()
+        if outcome == 'TD':
             return 'lime'
-        elif row['TD/INT'] == 'INT':
+        elif outcome == 'INT':
             return 'red'
-        elif row['TD/INT'] == 'Drop':
+        elif outcome == 'Drop':
             return 'yellow'
-        elif row['COM']:
+        elif float(row.get("COM", 0)) == 1.0:
             return 'aqua'
         else:
             return 'fuchsia'
 
     df['Color'] = df.apply(get_color, axis=1)
 
-    # 🔹 Sidebar
+    # --- Sidebar ---
     st.sidebar.header("Filtros")
-    down = st.sidebar.selectbox("Down", ["All"] + sorted(df['DN'].unique()))
-    distance_type = st.sidebar.selectbox(
-        "Tipo de distancia", ["Equal to", "Greater than", "Less than", "Between"]
-    )
-    d1 = st.sidebar.number_input("Distancia 1", 0, 50, 10)
-    d2 = st.sidebar.number_input("Distancia 2", 0, 50, 15)
-    title = st.sidebar.text_input("Título personalizado")
+    st.sidebar.subheader("Partidos (RIVAL)")
 
-    plot_football_passes(df, down, distance_type, d1, d2, title)
+    rivals = sorted(df["RIVAL"].dropna().astype(str).unique().tolist()) if "RIVAL" in df.columns else []
+    selected_rivals = st.sidebar.multiselect(
+        "Selecciona partido(s) por RIVAL",
+        options=rivals,
+        default=rivals
+    )
+
+    down = st.sidebar.selectbox("Down", ["All"] + sorted(df['DN'].unique()))
+    distance_type = st.sidebar.selectbox("Tipo de distancia", ["Greater than", "Equal to", "Less than", "Between"])
+    d1 = st.sidebar.number_input("Distancia 1", 0, 50, 0)
+    d2 = st.sidebar.number_input("Distancia 2", 0, 50, 30)
+    title = st.sidebar.text_input("Título personalizado")
+    st.sidebar.subheader("Defensa")
+
+    use_cov = st.sidebar.checkbox("Filtrar por Coverage", value=False)
+    selected_cov = None
+    if use_cov:
+        covs = sorted(df["COVERAGE"].dropna().unique().tolist())
+        selected_cov = st.sidebar.multiselect("Coverage", covs, default=covs)
+
+    use_mof = st.sidebar.checkbox("Filtrar por MOF", value=False)
+    selected_mof = None
+    if use_mof:
+        mofs = sorted(df["MOF"].dropna().unique().tolist())
+        selected_mof = st.sidebar.multiselect("MOF", mofs, default=mofs)
+
+    # --- Filtrado ÚNICO para todo (resumen + mapa) ---
+    df_plot = df.copy()
+
+    # 1) Rivales
+    if "RIVAL" in df_plot.columns and len(selected_rivals) > 0:
+        df_plot = df_plot[df_plot["RIVAL"].astype(str).isin(selected_rivals)]
+    else:
+        st.warning("Selecciona al menos un RIVAL.")
+        st.stop()
+
+    # 2) Coverage (si aplica)
+    if use_cov and selected_cov:
+        df_plot = df_plot[df_plot["COVERAGE"].isin(selected_cov)]
+
+    # 3) MOF (si aplica)
+    if use_mof and selected_mof:
+        df_plot = df_plot[df_plot["MOF"].isin(selected_mof)]
+
+    # 4) Down
+    if down != "All":
+        df_plot = df_plot[df_plot["DN"] == down]
+
+    # 5) Distancia
+    if distance_type == "Equal to":
+        df_plot = df_plot[df_plot["DIST"] == d1]
+    elif distance_type == "Greater than":
+        df_plot = df_plot[df_plot["DIST"] >= d1]
+    elif distance_type == "Less than":
+        df_plot = df_plot[df_plot["DIST"] <= d1]
+    elif distance_type == "Between":
+        df_plot = df_plot[(df_plot["DIST"] >= d1) & (df_plot["DIST"] <= d2)]
+
+
+    # Si no hay jugadas con esos filtros, avisa y corta
+    if df_plot.empty:
+        st.warning("No hay jugadas con esos filtros.")
+        st.stop()
+
+    # --- RESUMEN (CON df_plot) ---
+    summary = compute_summary(df_plot)
+
+    c1, c2, c3, c4, c5, c6 = st.columns(6)
+    c1.metric("ATT", summary["att"])
+    c2.metric("COMP", summary["comp"])
+    c3.metric("COMP%", f'{summary["comp_pct"]:.1f}%')
+    c4.metric("TD", summary["td"])
+    c5.metric("INT", summary["int"])
+    c6.metric("DROP", summary["drop"])
+    st.caption(f'Avg Depth: {summary["avg_depth"]:.1f} yd')
+
+    # --- MAPA (CON df_plot) ---
+    plot_football_passes(df_plot, down, distance_type, d1, d2, title)
+
+
+st.caption("⚠️ COVERAGE y MOF son simulados (demo) basados en down & distance.")
