@@ -7,11 +7,17 @@ Original file is located at
     https://colab.research.google.com/drive/1rIIHTO-49-JFJMrMi087oR4rrYuBJUUw
 """
 import streamlit as st
-st.title("QB Pass Chart V0.3")
+st.title("QB Pass Chart V0.3.1")
 
 import matplotlib.pyplot as plt
 import pandas as pd
 from matplotlib.lines import Line2D
+
+fig, ax = plt.subplots(figsize=(6, 4))
+ax.set_title("3rd & 3 – Red Zone vs SEA (Cover 3, MOF Closed)")
+
+st.subheader("📋 Key Scouting Plays")
+
 
 
 
@@ -121,8 +127,7 @@ def coverage_to_mof(cov: str) -> str:
 
 
 # Función para graficar los pases filtrados
-def plot_football_passes(df, down, distance_type, d1, d2, custom_title):
-
+def plot_football_passes(df, down, distance_type, d1, d2, custom_title, highlight_row_id=None):
     fig, ax = plt.subplots(figsize=(8, 8))
     draw_football_field(ax)
 
@@ -133,9 +138,10 @@ def plot_football_passes(df, down, distance_type, d1, d2, custom_title):
     ax.axhline(0, color='blue', linewidth=2)
     ax.set_aspect('equal')
 
-    title = custom_title if custom_title else f"Pass Chart – Down {down}"
+    title = custom_title if custom_title else "Pass Chart"
     ax.set_title(title)
 
+    # puntos
     for _, row in df.iterrows():
         x = row['Target X 100']
         y = row['Target Y 100'] - row['SPOT Y 100']
@@ -145,6 +151,15 @@ def plot_football_passes(df, down, distance_type, d1, d2, custom_title):
             ax.text(x, y, str(int(row['WR'])), fontsize=6,
                     ha='center', va='center', color='black')
 
+    # highlight (círculo blanco alrededor)
+    if highlight_row_id is not None and "ROW_ID" in df.columns:
+        sel = df[df["ROW_ID"] == highlight_row_id]
+        if not sel.empty:
+            xh = sel.iloc[0]['Target X 100']
+            yh = sel.iloc[0]['Target Y 100'] - sel.iloc[0]['SPOT Y 100']
+            ax.scatter(xh, yh, s=260, facecolors="none", edgecolors="white", linewidths=2.8)
+
+    # leyenda (tuya)
     legend_elements = [
         Line2D([0], [0], marker='o', color='w', label='Completo', markerfacecolor='aqua', markersize=8),
         Line2D([0], [0], marker='o', color='w', label='Incompleto', markerfacecolor='fuchsia', markersize=8),
@@ -197,6 +212,23 @@ if uploaded_file:
         default=rivals
     )
 
+    st.sidebar.subheader("Situational Presets")
+
+
+    preset = st.sidebar.radio(
+        "Situación",
+        [
+            "All Plays",
+            "1st & 10",
+            "3rd & Long",
+            "3rd & Short",
+            "Red Zone",
+            "Backed Up"
+        ]
+    )
+
+
+
     down = st.sidebar.selectbox("Down", ["All"] + sorted(df['DN'].unique()))
     distance_type = st.sidebar.selectbox("Tipo de distancia", ["Greater than", "Equal to", "Less than", "Between"])
     d1 = st.sidebar.number_input("Distancia 1", 0, 50, 0)
@@ -225,6 +257,39 @@ if uploaded_file:
     else:
         st.warning("Selecciona al menos un RIVAL.")
         st.stop()
+
+    df_plot = df_plot.copy()
+
+    if preset == "1st & 10":
+        df_plot = df_plot[
+            (df_plot["DN"] == 1) &
+            (df_plot["DIST"].between(9, 11))
+        ]
+
+    elif preset == "3rd & Long":
+        df_plot = df_plot[
+            (df_plot["DN"] == 3) &
+            (df_plot["DIST"] >= 7)
+        ]
+
+    elif preset == "3rd & Short":
+        df_plot = df_plot[
+            (df_plot["DN"] == 3) &
+            (df_plot["DIST"] <= 2)
+        ]
+
+    elif preset == "Red Zone":
+        df_plot = df_plot[df_plot["SPOT Y 100"] >= 80]
+
+    elif preset == "Backed Up":
+        df_plot = df_plot[df_plot["SPOT Y 100"] <= 10]
+
+    # All Plays → no hace nada
+
+
+    # All Plays → no hace nada
+    st.subheader(f"📊 {preset}")
+
 
     # 2) Coverage (si aplica)
     if use_cov and selected_cov:
@@ -265,9 +330,70 @@ if uploaded_file:
     c5.metric("INT", summary["int"])
     c6.metric("DROP", summary["drop"])
     st.caption(f'Avg Depth: {summary["avg_depth"]:.1f} yd')
+    df_plot = df_plot.copy()
+    df_plot["ROW_ID"] = df_plot.index.astype(int)  # id estable para resaltar
+    if "selected_row_id" not in st.session_state:
+        st.session_state.selected_row_id = None
 
-    # --- MAPA (CON df_plot) ---
-    plot_football_passes(df_plot, down, distance_type, d1, d2, title)
+
+    # ========= Placeholders (orden visual) =========
+    map_container = st.container()      # arriba
+    table_container = st.container()    # abajo
+
+    # Si el seleccionado ya no existe con filtros, resetea
+    if st.session_state.selected_row_id is not None:
+        if st.session_state.selected_row_id not in set(df_plot["ROW_ID"].tolist()):
+            st.session_state.selected_row_id = None
+
+    # ========= TABLA + DETALLE (se ve abajo) =========
+    with table_container:
+        st.subheader("📋 Lista de jugadas (dinámica)")
+
+        candidate_cols = ["HUDL #", "RIVAL", "DN", "DIST", "SPOT Y 100", "TD/INT", "COM", "WR"]
+        cols = [c for c in candidate_cols if c in df_plot.columns]
+
+        plays_view = df_plot[cols + ["ROW_ID"]].copy()
+        if "HUDL #" in plays_view.columns:
+            plays_view["HUDL #"] = plays_view["HUDL #"].astype(str)
+
+        event = st.dataframe(
+            plays_view,
+            use_container_width=True,
+            hide_index=True,
+            on_select="rerun",
+            selection_mode="single-row",
+            key="plays_table"   # key fijo para evitar glitches
+        )
+
+        if event and event.selection.rows:
+            idx = event.selection.rows[0]
+            st.session_state.selected_row_id = int(plays_view.iloc[idx]["ROW_ID"])
+
+        st.subheader("📝 Detalle de jugada seleccionada")
+        if st.session_state.selected_row_id is None:
+            st.info("Selecciona una jugada de la tabla para ver el detalle y resaltarla en el mapa.")
+        else:
+            sel = df_plot[df_plot["ROW_ID"] == st.session_state.selected_row_id]
+            if sel.empty:
+                st.warning("La jugada seleccionada ya no existe con los filtros actuales.")
+                st.session_state.selected_row_id = None
+            else:
+                r = sel.iloc[0]
+                c1, c2, c3, c4, c5 = st.columns(5)
+                if "DN" in df_plot.columns: c1.metric("Down", int(r["DN"]))
+                if "DIST" in df_plot.columns: c2.metric("Dist", int(r["DIST"]))
+                if "RIVAL" in df_plot.columns: c3.metric("Rival", str(r["RIVAL"]))
+                if "HUDL #" in df_plot.columns: c4.metric("HUDL #", str(r["HUDL #"]))
+                if "TD/INT" in df_plot.columns: c5.metric("Resultado", str(r["TD/INT"]))
+
+    # ========= MAPA (se ve arriba, pero ya usa selection actual) =========
+    with map_container:
+        plot_football_passes(
+            df_plot, down, distance_type, d1, d2, title,
+            highlight_row_id=st.session_state.selected_row_id
+        )
+
+
 
 
 st.caption("⚠️ COVERAGE y MOF son simulados (demo) basados en down & distance.")
